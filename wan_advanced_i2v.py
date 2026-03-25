@@ -228,16 +228,21 @@ class WanAdvancedI2V(io.ComfyNode):
                     image_cond_latent[:, :, :1] = anchor_latent
                 
                 # Insert motion_latent right after anchor (for continuity)
-                motion_start = 1
-                motion_end = motion_start + motion_latent.shape[2]
-                if motion_end <= total_latents:
-                    image_cond_latent[:, :, motion_start:motion_end] = motion_latent
+                motion_start = 1 if enable_start_frame else 0
+                motion_end = min(motion_start + motion_latent.shape[2], total_latents)
+                if motion_end > motion_start:
+                    motion_to_use = motion_latent[:, :, :motion_end - motion_start]
+                    image_cond_latent[:, :, motion_start:motion_end] = motion_to_use
                 
                 # Insert middle_image at middle_latent_idx if provided
+                actual_middle_latent_idx = middle_latent_idx
                 if middle_image is not None and enable_middle_frame:
                     middle_latent = vae.encode(middle_image[:1, :, :, :3])
                     if middle_latent_idx < total_latents:
-                        image_cond_latent[:, :, middle_latent_idx:middle_latent_idx+1] = middle_latent
+                        while actual_middle_latent_idx < motion_end and actual_middle_latent_idx < total_latents:
+                            actual_middle_latent_idx += 1
+                        if actual_middle_latent_idx < total_latents:
+                            image_cond_latent[:, :, actual_middle_latent_idx:actual_middle_latent_idx+1] = middle_latent
                 
                 # Insert end_image at end_latent_idx if provided
                 if end_image is not None and enable_end_frame:
@@ -255,11 +260,21 @@ class WanAdvancedI2V(io.ComfyNode):
                 if enable_start_frame:
                     mask_svi_high[:, :, :1] = max(0.0, 1.0 - high_noise_start_strength)
                     mask_svi_low[:, :, :1] = max(0.0, 1.0 - low_noise_start_strength)
+
+                if motion_end > motion_start:
+                    decay_rate = 0.7
+                    for i in range(motion_start, motion_end):
+                        distance = i - motion_start
+                        decay = decay_rate ** distance
+                        mask_high_val = 1.0 - (high_noise_start_strength * decay)
+                        mask_svi_high[:, :, i:i+1] = max(0.05, min(0.95, mask_high_val))
+                        mask_low_val = 1.0 - (low_noise_start_strength * decay * 0.7)
+                        mask_svi_low[:, :, i:i+1] = max(0.1, min(0.95, mask_low_val))
                 
                 # Middle frame: apply strength
                 if middle_image is not None and enable_middle_frame:
-                    start_range = max(0, middle_latent_idx)
-                    end_range = min(total_latents, middle_latent_idx + 1)
+                    start_range = max(0, actual_middle_latent_idx)
+                    end_range = min(total_latents, actual_middle_latent_idx + 1)
                     mask_svi_high[:, :, start_range:end_range] = max(0.0, 1.0 - high_noise_mid_strength)
                     mask_svi_low[:, :, start_range:end_range] = max(0.0, 1.0 - low_noise_mid_strength)
                 
