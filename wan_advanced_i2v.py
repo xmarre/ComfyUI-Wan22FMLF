@@ -1,5 +1,6 @@
 from typing_extensions import override
 from comfy_api.latest import io
+import inspect
 import torch
 import torch.nn.functional as F
 import node_helpers
@@ -635,11 +636,22 @@ class WanAdvancedI2V(io.ComfyNode):
         reference_latents = [latent for latent in latents if latent is not None]
         if not reference_latents:
             return conditioning
-        return node_helpers.conditioning_set_values(
-            conditioning,
-            {"reference_latents": reference_latents},
-            append=True,
-        )
+        if "append" in inspect.signature(node_helpers.conditioning_set_values).parameters:
+            return node_helpers.conditioning_set_values(
+                conditioning,
+                {"reference_latents": reference_latents},
+                append=True,
+            )
+        out = []
+        for cond, values in conditioning:
+            merged = values.copy()
+            existing = merged.get("reference_latents")
+            if existing is None:
+                merged["reference_latents"] = list(reference_latents)
+            else:
+                merged["reference_latents"] = list(existing) + list(reference_latents)
+            out.append((cond, merged))
+        return out
 
     @classmethod
     def _negative_reference_anchor(cls, anchor_latent, reference_anchor_mode):
