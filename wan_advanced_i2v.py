@@ -57,6 +57,7 @@ class WanAdvancedI2V(io.ComfyNode):
                 io.Float.Input("svi_motion_strength", default=1.0, min=0.0, max=2.0, step=0.05, round=0.01, display_mode=io.NumberDisplay.slider, optional=True, tooltip="SVI mode motion intensity. <1.0 = more stable, >1.0 = more dynamic"),
                 io.Latent.Input("prev_latent", optional=True),
                 io.Combo.Input("reference_anchor_mode", ["wan_default", "strong_cfg"], default="wan_default", optional=True, tooltip="Chained SVI start-image reference anchor behavior. wan_default = same reference latent on positive and negative. strong_cfg = real anchor on positive, zero anchor on negative."),
+                io.Int.Input("reference_anchor_repeats", default=1, min=1, max=8, step=1, display_mode=io.NumberDisplay.number, optional=True, tooltip="How many times to append the start-image anchor as a Wan reference latent during chained continuation."),
             ],
             outputs=[
                 io.Conditioning.Output(display_name="positive_high"),
@@ -80,7 +81,7 @@ class WanAdvancedI2V(io.ComfyNode):
                 clip_vision_start_image=None, clip_vision_middle_image=None,
                 clip_vision_end_image=None, enable_start_frame=True, enable_middle_frame=True,
                 enable_end_frame=True, svi_motion_strength=1.0,
-                prev_latent=None, reference_anchor_mode="wan_default"):
+                prev_latent=None, reference_anchor_mode="wan_default", reference_anchor_repeats=1):
         
         spacial_scale = vae.spacial_compression_encode()
         latent_channels = vae.latent_channels
@@ -298,13 +299,14 @@ class WanAdvancedI2V(io.ComfyNode):
                     "concat_mask": mask_svi_high
                 })
 
-                if enable_start_frame and start_image is not None:
-                    positive_high_noise = cls._append_reference_latents(positive_high_noise, anchor_latent)
-                    positive_low_noise = cls._append_reference_latents(positive_low_noise, anchor_latent)
-                    negative_out = cls._append_reference_latents(
-                        negative_out,
-                        cls._negative_reference_anchor(anchor_latent, reference_anchor_mode),
-                    )
+                if start_image is not None:
+                    ref_repeats = max(1, int(reference_anchor_repeats))
+                    positive_refs = [anchor_latent for _ in range(ref_repeats)]
+                    negative_ref = cls._negative_reference_anchor(anchor_latent, reference_anchor_mode)
+                    negative_refs = [negative_ref for _ in range(ref_repeats)]
+                    positive_high_noise = cls._append_reference_latents(positive_high_noise, *positive_refs)
+                    positive_low_noise = cls._append_reference_latents(positive_low_noise, *positive_refs)
+                    negative_out = cls._append_reference_latents(negative_out, *negative_refs)
                 
                 # Handle clip vision
                 clip_vision_output = cls._merge_clip_vision_outputs(
