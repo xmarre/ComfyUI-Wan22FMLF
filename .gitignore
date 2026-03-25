@@ -14,6 +14,10 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Editor / IDE folders
+.vs/
+v17/
+
 # Project artifacts
 analysis/
 *.log

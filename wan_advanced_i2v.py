@@ -1,5 +1,6 @@
 from typing_extensions import override
 from comfy_api.latest import io
+import inspect
 import torch
 import torch.nn.functional as F
 import node_helpers
@@ -55,6 +56,7 @@ class WanAdvancedI2V(io.ComfyNode):
                 io.Boolean.Input("enable_end_frame", default=True, optional=True),
                 io.Float.Input("svi_motion_strength", default=1.0, min=0.0, max=2.0, step=0.05, round=0.01, display_mode=io.NumberDisplay.slider, optional=True, tooltip="SVI mode motion intensity. <1.0 = more stable, >1.0 = more dynamic"),
                 io.Latent.Input("prev_latent", optional=True),
+                io.Combo.Input("reference_anchor_mode", ["wan_default", "strong_cfg"], default="wan_default", optional=True, tooltip="Chained SVI start-image reference anchor behavior. wan_default = same reference latent on positive and negative. strong_cfg = real anchor on positive, zero anchor on negative."),
             ],
             outputs=[
                 io.Conditioning.Output(display_name="positive_high"),
@@ -78,7 +80,7 @@ class WanAdvancedI2V(io.ComfyNode):
                 clip_vision_start_image=None, clip_vision_middle_image=None,
                 clip_vision_end_image=None, enable_start_frame=True, enable_middle_frame=True,
                 enable_end_frame=True, svi_motion_strength=1.0,
-                prev_latent=None):
+                prev_latent=None, reference_anchor_mode="wan_default"):
         
         spacial_scale = vae.spacial_compression_encode()
         latent_channels = vae.latent_channels
@@ -280,6 +282,14 @@ class WanAdvancedI2V(io.ComfyNode):
                     "concat_latent_image": image_cond_latent,
                     "concat_mask": mask_svi_high
                 })
+
+                if enable_start_frame and start_image is not None:
+                    positive_high_noise = cls._append_reference_latents(positive_high_noise, anchor_latent)
+                    positive_low_noise = cls._append_reference_latents(positive_low_noise, anchor_latent)
+                    negative_out = cls._append_reference_latents(
+                        negative_out,
+                        cls._negative_reference_anchor(anchor_latent, reference_anchor_mode),
+                    )
                 
                 # Handle clip vision
                 clip_vision_output = cls._merge_clip_vision_outputs(
@@ -620,6 +630,34 @@ class WanAdvancedI2V(io.ComfyNode):
         aligned_pixel_idx = latent_idx * 4
         aligned_pixel_idx = max(0, min(aligned_pixel_idx, total_frames - 1))
         return aligned_pixel_idx, latent_idx
+
+    @classmethod
+    def _append_reference_latents(cls, conditioning, *latents):
+        reference_latents = [latent for latent in latents if latent is not None]
+        if not reference_latents:
+            return conditioning
+        if "append" in inspect.signature(node_helpers.conditioning_set_values).parameters:
+            return node_helpers.conditioning_set_values(
+                conditioning,
+                {"reference_latents": reference_latents},
+                append=True,
+            )
+        out = []
+        for cond, values in conditioning:
+            merged = values.copy()
+            existing = merged.get("reference_latents")
+            if existing is None:
+                merged["reference_latents"] = list(reference_latents)
+            else:
+                merged["reference_latents"] = list(existing) + list(reference_latents)
+            out.append([cond, merged])
+        return out
+
+    @classmethod
+    def _negative_reference_anchor(cls, anchor_latent, reference_anchor_mode):
+        if reference_anchor_mode == "strong_cfg":
+            return torch.zeros_like(anchor_latent)
+        return anchor_latent
     
     @classmethod
     def _merge_clip_vision_outputs(cls, *outputs):
