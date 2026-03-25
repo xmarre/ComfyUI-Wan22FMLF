@@ -650,7 +650,7 @@ class WanAdvancedI2V(io.ComfyNode):
                 merged["reference_latents"] = list(reference_latents)
             else:
                 merged["reference_latents"] = list(existing) + list(reference_latents)
-            out.append((cond, merged))
+            out.append([cond, merged])
         return out
 
     @classmethod
